@@ -12,6 +12,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get('/', (req, res) => {
+  res.status(200).json({
+    name: 'mini-jira-auth API',
+    status: 'ok',
+    endpoints: {
+      health: 'GET /health',
+      admin: '/admin',
+      tasks: '/api/tasks',
+      projects: '/api/projects',
+      comments: '/api/tasks/:taskId/comments',
+    },
+    note: 'Protected routes require Authorization: Bearer <Cognito access token>',
+  });
+});
+
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 app.use('/admin', adminRoutes);

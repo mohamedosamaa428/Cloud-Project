@@ -2,11 +2,13 @@ const {
     PutCommand, GetCommand, UpdateCommand,
     DeleteCommand, QueryCommand, ScanCommand
 } = require("@aws-sdk/lib-dynamodb");
+const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
 const { v4: uuidv4 } = require("uuid");
 
-// We'll import docClient after we see Person 2's dynamo.js
-// For now using this path — adjust if needed
 const docClient = require("../db/dynamo");
+
+const snsClient = new SNSClient({ region: process.env.AWS_REGION || "eu-west-1" });
+const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN || "arn:aws:sns:eu-west-1:154845614825:mini-jira-task-assignment";
 
 const TASKS_TABLE = process.env.TASKS_TABLE || "Tasks";
 const AUDITLOG_TABLE = process.env.AUDITLOG_TABLE || "AuditLog";
@@ -49,6 +51,13 @@ const createTask = async (req, res) => {
             updatedAt: now,
         };
         await docClient.send(new PutCommand({ TableName: TASKS_TABLE, Item: task }));
+
+        await snsClient.send(new PublishCommand({
+            TopicArn: SNS_TOPIC_ARN,
+            Message: JSON.stringify({ taskId: task.taskId, assigneeId, teamId, title }),
+            Subject: "New Task Assigned",
+        }));
+
         return res.status(201).json(task);
     } catch (err) {
         console.error("createTask error:", err);
@@ -139,7 +148,16 @@ const updateTask = async (req, res) => {
             if (description !== undefined) { updateExpression += ", description = :desc"; expressionValues[":desc"] = description; }
             if (priority) { updateExpression += ", priority = :priority"; expressionValues[":priority"] = priority; }
             if (deadline) { updateExpression += ", deadline = :deadline"; expressionValues[":deadline"] = deadline; }
-            if (assigneeId) { updateExpression += ", assigneeId = :assigneeId"; expressionValues[":assigneeId"] = assigneeId; }
+            if (assigneeId) {
+                updateExpression += ", assigneeId = :assigneeId";
+                expressionValues[":assigneeId"] = assigneeId;
+
+                await snsClient.send(new PublishCommand({
+                    TopicArn: SNS_TOPIC_ARN,
+                    Message: JSON.stringify({ taskId, assigneeId, title: task.title }),
+                    Subject: "Task Reassigned",
+                }));
+            }
             if (imageUrl) { updateExpression += ", imageUrl = :imageUrl"; expressionValues[":imageUrl"] = imageUrl; }
         }
 
