@@ -3,7 +3,7 @@ const router = express.Router();
 const auth = require("../middleware/auth");
 const {
     createTask, getAllTasks, getTask,
-    updateTask, deleteTask, getTaskAuditLog
+    updateTask, deleteTask, getTaskAuditLog, upload
 } = require("../controllers/tasks.controller");
 
 const managerOnly = (req, res, next) => {
@@ -13,10 +13,10 @@ const managerOnly = (req, res, next) => {
     next();
 };
 
-router.post("/", auth, managerOnly, createTask);
+router.post("/", auth, managerOnly, upload.single("image"), createTask);
 router.get("/", auth, getAllTasks);
 router.get("/:taskId", auth, getTask);
-router.put("/:taskId", auth, updateTask);
+router.put("/:taskId", auth, upload.single("image"), updateTask);
 router.delete("/:taskId", auth, managerOnly, deleteTask);
 router.get("/:taskId/audit", auth, getTaskAuditLog);
 
