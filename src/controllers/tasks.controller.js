@@ -3,15 +3,33 @@ const {
     DeleteCommand, QueryCommand, ScanCommand
 } = require("@aws-sdk/lib-dynamodb");
 const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const { v4: uuidv4 } = require("uuid");
+const multer = require("multer");
 
 const docClient = require("../db/dynamo");
 
 const snsClient = new SNSClient({ region: process.env.AWS_REGION || "eu-west-1" });
+const s3Client = new S3Client({ region: process.env.AWS_REGION || "eu-west-1" });
+
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN || "arn:aws:sns:eu-west-1:154845614825:mini-jira-task-assignment";
+const S3_BUCKET = process.env.S3_BUCKET || "mini-jira-originals-mo";
 
 const TASKS_TABLE = process.env.TASKS_TABLE || "Tasks";
 const AUDITLOG_TABLE = process.env.AUDITLOG_TABLE || "AuditLog";
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+async function uploadToS3(file) {
+    const key = `${uuidv4()}-${file.originalname}`;
+    await s3Client.send(new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+    }));
+    return `https://${S3_BUCKET}.s3.eu-west-1.amazonaws.com/${key}`;
+}
 
 async function writeAuditLog(taskId, userId, oldStatus, newStatus) {
     await docClient.send(new PutCommand({
@@ -34,6 +52,12 @@ const createTask = async (req, res) => {
         if (!title || !teamId || !assigneeId) {
             return res.status(400).json({ error: "title, teamId, assigneeId are required" });
         }
+
+        let imageUrl = null;
+        if (req.file) {
+            imageUrl = await uploadToS3(req.file);
+        }
+
         const now = new Date().toISOString();
         const task = {
             taskId: uuidv4(),
@@ -45,7 +69,7 @@ const createTask = async (req, res) => {
             teamId,
             projectId: projectId || null,
             status: "TODO",
-            imageUrl: null,
+            imageUrl,
             createdBy: req.user.userId,
             createdAt: now,
             updatedAt: now,
@@ -126,7 +150,7 @@ const updateTask = async (req, res) => {
         }
 
         const validStatuses = ["TODO", "IN_PROGRESS", "IN_REVIEW", "DONE"];
-        const { title, description, priority, deadline, assigneeId, status, imageUrl } = req.body;
+        const { title, description, priority, deadline, assigneeId, status } = req.body;
         if (status && !validStatuses.includes(status)) {
             return res.status(400).json({ error: "Invalid status value" });
         }
@@ -158,7 +182,11 @@ const updateTask = async (req, res) => {
                     Subject: "Task Reassigned",
                 }));
             }
-            if (imageUrl) { updateExpression += ", imageUrl = :imageUrl"; expressionValues[":imageUrl"] = imageUrl; }
+            if (req.file) {
+                const newImageUrl = await uploadToS3(req.file);
+                updateExpression += ", imageUrl = :imageUrl";
+                expressionValues[":imageUrl"] = newImageUrl;
+            }
         }
 
         const updated = await docClient.send(new UpdateCommand({
@@ -184,6 +212,15 @@ const deleteTask = async (req, res) => {
             TableName: TASKS_TABLE, Key: { taskId }
         }));
         if (!existing.Item) return res.status(404).json({ error: "Task not found" });
+
+        if (existing.Item.imageUrl) {
+            const key = existing.Item.imageUrl.split(".amazonaws.com/")[1];
+            await s3Client.send(new DeleteObjectCommand({
+                Bucket: S3_BUCKET,
+                Key: key,
+            }));
+        }
+
         await docClient.send(new DeleteCommand({
             TableName: TASKS_TABLE, Key: { taskId }
         }));
@@ -219,4 +256,4 @@ const getTaskAuditLog = async (req, res) => {
     }
 };
 
-module.exports = { createTask, getAllTasks, getTask, updateTask, deleteTask, getTaskAuditLog };
+module.exports = { createTask, getAllTasks, getTask, updateTask, deleteTask, getTaskAuditLog, upload };
